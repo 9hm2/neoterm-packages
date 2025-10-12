@@ -72,6 +72,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
+          ref: master
           fetch-depth: 1000
 
       - name: Determine packages to build
