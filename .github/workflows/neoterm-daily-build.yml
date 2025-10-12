@@ -111,6 +111,17 @@ jobs:
           echo "Built .deb files:"
           find output -name "*.deb" -type f | sort
 
+      - name: Rename files for artifact upload (remove colons)
+        run: |
+          cd output
+          for file in *.deb; do
+            if [[ "$file" == *":"* ]]; then
+              newname="${file//:/_}"
+              echo "Renaming: $file -> $newname"
+              mv "$file" "$newname"
+            fi
+          done
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -145,6 +156,20 @@ jobs:
         run: |
           mkdir -p neoterm-repo/dists/stable/main/binary-aarch64
           mkdir -p neoterm-repo/pool/main
+
+          # Restore colon in filenames (reverse the artifact rename)
+          cd debs
+          for file in *.deb; do
+            if [[ "$file" == *"_"* ]]; then
+              # Only rename back if it looks like it had a colon (contains underscore in version)
+              newname="${file//_/:}"
+              if [[ "$newname" != "$file" ]]; then
+                echo "Restoring: $file -> $newname"
+                mv "$file" "$newname" || true
+              fi
+            fi
+          done
+          cd ..
 
           # Copy .deb files to pool
           cp -v debs/*.deb neoterm-repo/pool/main/
