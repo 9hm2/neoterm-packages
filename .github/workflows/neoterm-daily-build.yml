@@ -1,0 +1,201 @@
+name: NeoTerm Daily Build
+
+on:
+  schedule:
+    # Run daily at 00:00 UTC
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+    inputs:
+      packages:
+        description: "Space-separated package names to build (optional - builds all by default)"
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  sync-upstream:
+    name: Sync with termux-packages
+    runs-on: ubuntu-latest
+    outputs:
+      has-changes: ${{ steps.check-changes.outputs.has-changes }}
+    steps:
+      - name: Checkout neoterm-packages
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "NeoTerm Bot"
+          git config user.email "bot@neoterm.io"
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/termux/termux-packages.git || true
+          git fetch upstream master
+
+      - name: Check for changes
+        id: check-changes
+        run: |
+          # Get commits from upstream that we don't have
+          CHANGES=$(git log HEAD..upstream/master --oneline packages/ | wc -l)
+          echo "Found $CHANGES new commits in upstream packages/"
+
+          if [ "$CHANGES" -gt 0 ]; then
+            echo "has-changes=true" >> $GITHUB_OUTPUT
+            git log HEAD..upstream/master --oneline packages/ > /tmp/changes.txt
+            echo "Changed packages:"
+            cat /tmp/changes.txt
+          else
+            echo "has-changes=false" >> $GITHUB_OUTPUT
+            echo "No new changes from upstream"
+          fi
+
+      - name: Merge upstream changes
+        if: steps.check-changes.outputs.has-changes == 'true'
+        run: |
+          git merge upstream/master --no-edit -m "chore: sync with termux-packages upstream"
+          git push origin master
+
+  build-packages:
+    name: Build packages for ${{ matrix.target_arch }}
+    needs: sync-upstream
+    if: needs.sync-upstream.outputs.has-changes == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target_arch: [aarch64]  # NeoTerm primary architecture
+      fail-fast: false
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1000
+
+      - name: Determine packages to build
+        id: packages
+        run: |
+          if [ -n "${{ github.event.inputs.packages }}" ]; then
+            # Manual trigger with specific packages
+            PACKAGES="${{ github.event.inputs.packages }}"
+            echo "Building manually specified packages: $PACKAGES"
+          else
+            # Auto-detect changed packages from last sync
+            PACKAGES=$(git diff HEAD~1 --name-only packages/ | \
+              grep -E '^packages/[^/]+/' | \
+              cut -d'/' -f2 | \
+              sort -u | \
+              tr '\n' ' ')
+
+            if [ -z "$PACKAGES" ]; then
+              # Fallback to essential packages
+              PACKAGES="bash coreutils dpkg apt grep sed gzip bzip2 xz-utils tar findutils diffutils ncurses readline libandroid-support libiconv zlib openssl"
+            fi
+            echo "Building changed packages: $PACKAGES"
+          fi
+
+          echo "packages=$PACKAGES" >> $GITHUB_OUTPUT
+
+      - name: Build packages with Docker
+        env:
+          PACKAGES: ${{ steps.packages.outputs.packages }}
+        run: |
+          echo "Building packages: $PACKAGES"
+          ./scripts/run-docker.sh ./build-package.sh -a ${{ matrix.target_arch }} $PACKAGES
+
+      - name: List built packages
+        run: |
+          echo "Built .deb files:"
+          find output -name "*.deb" -type f | sort
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: debs-${{ matrix.target_arch }}
+          path: output/*.deb
+          retention-days: 7
+
+  publish-to-repo:
+    name: Publish to NeoTerm-repo
+    needs: build-packages
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout NeoTerm-repo
+        uses: actions/checkout@v4
+        with:
+          repository: 9hm2/NeoTerm-repo
+          token: ${{ secrets.NEOTERM_REPO_TOKEN }}
+          path: neoterm-repo
+
+      - name: Download built packages
+        uses: actions/download-artifact@v4
+        with:
+          name: debs-aarch64
+          path: ./debs
+
+      - name: Install repository tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dpkg-dev apt-utils gzip
+
+      - name: Copy packages to repository
+        run: |
+          mkdir -p neoterm-repo/dists/stable/main/binary-aarch64
+          mkdir -p neoterm-repo/pool/main
+
+          # Copy .deb files to pool
+          cp -v debs/*.deb neoterm-repo/pool/main/
+
+          cd neoterm-repo
+
+      - name: Generate repository metadata
+        run: |
+          cd neoterm-repo
+
+          # Generate Packages file
+          dpkg-scanpackages --arch aarch64 pool/ > dists/stable/main/binary-aarch64/Packages
+
+          # Compress Packages file
+          gzip -k -f dists/stable/main/binary-aarch64/Packages
+
+          # Generate Release file
+          cd dists/stable
+          cat > Release << EOF
+          Origin: NeoTerm
+          Label: NeoTerm Packages
+          Suite: stable
+          Codename: stable
+          Architectures: aarch64
+          Components: main
+          Description: NeoTerm package repository
+          Date: $(date -R)
+          EOF
+
+          # Add checksums to Release
+          echo "MD5Sum:" >> Release
+          find main -type f -exec md5sum {} \; | sed 's/main/ main/' >> Release
+
+          echo "SHA256:" >> Release
+          find main -type f -exec sha256sum {} \; | sed 's/main/ main/' >> Release
+
+      - name: Commit and push to NeoTerm-repo
+        run: |
+          cd neoterm-repo
+          git config user.name "NeoTerm Bot"
+          git config user.email "bot@neoterm.io"
+          git add .
+          git commit -m "chore: update packages ($(date +%Y-%m-%d))" || exit 0
+          git push
+
+  cleanup:
+    name: Cleanup old artifacts
+    needs: publish-to-repo
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete old artifacts
+        uses: geekyeggo/delete-artifact@v5
+        with:
+          name: debs-*
+          failOnError: false
