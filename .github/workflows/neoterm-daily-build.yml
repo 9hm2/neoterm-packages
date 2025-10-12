@@ -90,8 +90,8 @@ jobs:
               tr '\n' ' ')
 
             if [ -z "$PACKAGES" ]; then
-              # Fallback to essential packages (only from packages/, not disabled-packages/)
-              PACKAGES="bash coreutils dpkg apt grep sed gzip xz-utils tar findutils diffutils ncurses readline libandroid-support libiconv zlib openssl"
+              # Fallback to essential packages (verified to exist in packages/)
+              PACKAGES="bash coreutils dpkg apt grep sed gzip tar findutils diffutils ncurses readline libandroid-support libiconv zlib openssl"
             fi
             echo "Building changed packages: $PACKAGES"
           fi
