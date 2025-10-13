@@ -25,8 +25,9 @@ Created three automated build pipelines:
 - **Publish** to NeoTerm-repo automatically
 
 #### `neoterm-full-rebuild.yml` - Complete Repository Rebuild
-- **85 batches** × 25 packages each = ~2125 capacity
+- **200 batches** × 10 packages each = 2000 capacity
 - **Sequential processing** (one batch at a time)
+- **Aggressive cleanup** before AND after each batch
 - **Excludes large packages** (rust, llvm, dotnet, etc.)
 - Builds ~1985 regular packages
 
@@ -112,8 +113,9 @@ GitHub Actions free tier provides 14GB disk space. Some packages require 10-20GB
 ### Solution: Split Regular and Large Packages
 
 #### Regular Packages (1985 packages)
-- Built in **85 batches** of 25 packages each
+- Built in **200 batches** of 10 packages each
 - Sequential processing (one batch at a time)
+- Aggressive disk cleanup before AND after each batch
 - Each batch completes → publishes → cleans up → next starts
 - **Workflow**: `neoterm-full-rebuild.yml`
 
@@ -134,9 +136,14 @@ clang, swiftshader
 ### Complete Build Process
 
 To rebuild the entire repository:
-1. **Run** `neoterm-full-rebuild.yml` → Builds 1985 regular packages
-2. **Run** `neoterm-large-packages.yml` → Builds 20 large packages
+1. **Run** `neoterm-full-rebuild.yml` → Builds 1985 regular packages (200 batches × 10 packages)
+2. **Run** `neoterm-large-packages.yml` → Builds 20 large packages (individually)
 3. **Total**: All 2005+ packages built and published
+
+**Estimated time:**
+- Regular packages: ~200 batches × 30-60 min = 100-200 hours (4-8 days)
+- Large packages: ~20 packages × 2-8 hours = 40-160 hours (2-7 days)
+- **Total**: 6-15 days for complete rebuild
 
 ## Key Benefits
 
