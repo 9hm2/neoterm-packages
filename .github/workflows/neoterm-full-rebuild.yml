@@ -147,64 +147,39 @@ jobs:
             fi
           done
 
-      - name: Upload build artifacts
+      - name: Checkout NeoTerm-repo for publishing
         if: steps.packages.outputs.skip != 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: debs-batch-${{ matrix.batch }}-${{ matrix.target_arch }}
-          path: output/*.deb
-          retention-days: 7
-
-  publish-all:
-    name: Publish all batches to NeoTerm-repo
-    needs: build-batch
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout NeoTerm-repo
         uses: actions/checkout@v4
         with:
           repository: 9hm2/NeoTerm-repo
           token: ${{ secrets.NEOTERM_REPO_TOKEN }}
           path: neoterm-repo
 
-      - name: Download all batch artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: ./debs-all
-
-      - name: Install repository tools
+      - name: Restore colons in filenames
+        if: steps.packages.outputs.skip != 'true'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y dpkg-dev apt-utils gzip
-
-      - name: Merge and copy packages to repository
-        run: |
-          mkdir -p neoterm-repo/dists/stable/main/binary-aarch64
-          mkdir -p merged-debs
-
-          # Merge all batch artifacts
-          for batch_dir in debs-all/debs-batch-*; do
-            if [ -d "$batch_dir" ]; then
-              echo "Processing $(basename $batch_dir)..."
-              cp -v "$batch_dir"/*.deb merged-debs/ 2>/dev/null || true
-            fi
-          done
-
-          # Restore colons in filenames
-          cd merged-debs
+          cd output
           for file in *.deb; do
             if [[ "$file" == *"_"* ]]; then
+              # Restore colon (was renamed for artifact compatibility)
               newname="${file//_/:}"
               if [[ "$newname" != "$file" ]]; then
                 mv "$file" "$newname" 2>/dev/null || true
               fi
             fi
           done
-          cd ..
 
-          # Copy to pool with proper directory structure
-          total=0
-          for deb in merged-debs/*.deb; do
+      - name: Install repository tools
+        if: steps.packages.outputs.skip != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dpkg-dev apt-utils gzip
+
+      - name: Copy packages to NeoTerm-repo
+        if: steps.packages.outputs.skip != 'true'
+        run: |
+          # Copy built packages to pool with proper Debian structure
+          for deb in output/*.deb; do
             if [ -f "$deb" ]; then
               filename=$(basename "$deb")
               # Extract package name (first part before _)
@@ -228,16 +203,18 @@ jobs:
               targetdir="neoterm-repo/pool/main/$prefix/$pkgname"
               mkdir -p "$targetdir"
 
-              cp "$deb" "$targetdir/"
-              ((total++))
+              echo "Copying $filename to $prefix/$pkgname/"
+              cp -v "$deb" "$targetdir/"
             fi
           done
 
-          echo "Total packages copied to repository: $total"
-
       - name: Generate repository metadata
+        if: steps.packages.outputs.skip != 'true'
         run: |
           cd neoterm-repo
+
+          # Create dists structure if not exists
+          mkdir -p dists/stable/main/binary-aarch64
 
           # Generate Packages file
           dpkg-scanpackages --arch aarch64 pool/ > dists/stable/main/binary-aarch64/Packages
@@ -254,7 +231,7 @@ jobs:
           Codename: stable
           Architectures: aarch64
           Components: main
-          Description: NeoTerm complete package repository (Termux-compatible)
+          Description: NeoTerm package repository (batch ${{ matrix.batch }})
           Date: $(date -R)
           EOF
 
@@ -266,21 +243,18 @@ jobs:
           find main -type f -exec sha256sum {} \; | sed 's/main/ main/' >> Release
 
       - name: Commit and push to NeoTerm-repo
+        if: steps.packages.outputs.skip != 'true'
         run: |
           cd neoterm-repo
           git config user.name "NeoTerm Bot"
           git config user.email "bot@neoterm.io"
           git add .
-          git commit -m "chore: full repository rebuild ($(date +%Y-%m-%d))" || exit 0
-          git push
 
-  cleanup:
-    name: Cleanup batch artifacts
-    needs: publish-all
-    runs-on: ubuntu-latest
-    steps:
-      - name: Delete batch artifacts
-        uses: geekyeggo/delete-artifact@v5
-        with:
-          name: debs-batch-*
-          failOnError: false
+          # Check if there are changes to commit
+          if git diff --staged --quiet; then
+            echo "No changes to commit (packages already in repo)"
+          else
+            git commit -m "chore: add batch ${{ matrix.batch }} packages ($(date +%Y-%m-%d))"
+            git push
+            echo "Successfully published batch ${{ matrix.batch }} to NeoTerm-repo"
+          fi
