@@ -1,27 +1,46 @@
-name: NeoTerm Full Repository Rebuild
+name: NeoTerm Large Packages Build
 
 on:
   workflow_dispatch:
     inputs:
-      batch_number:
-        description: "Batch number to build (1-20, or 'all' for everything)"
+      package:
+        description: "Specific large package to build (optional - builds all if empty)"
         required: false
-        default: '1'
 
 permissions:
   contents: write
 
 jobs:
-  build-batch:
-    name: Build batch ${{ matrix.batch }} for ${{ matrix.target_arch }}
+  build-large-package:
+    name: Build ${{ matrix.package }} for ${{ matrix.target_arch }}
     runs-on: ubuntu-latest
-    timeout-minutes: 360  # 6 hours max per batch
+    timeout-minutes: 480  # 8 hours max per large package
     strategy:
       matrix:
         target_arch: [aarch64]
-        batch: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85]
+        package:
+          - rust
+          - llvm-mingw-w64
+          - llvm-mingw-w64-tools
+          - dotnet-host
+          - dotnet8.0
+          - dotnet9.0
+          - ghc
+          - kotlin
+          - swift
+          - openjdk-17
+          - openjdk-21
+          - mono
+          - agg
+          - rust-analyzer
+          - rust-bindgen
+          - nodejs-lts
+          - chromium
+          - gcc-default
+          - clang
+          - swiftshader
       fail-fast: false
-      max-parallel: 1  # Sequential - one batch at a time to avoid disk space issues
+      max-parallel: 1  # ONE at a time - critical for disk space
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -29,73 +48,74 @@ jobs:
           ref: master
           fetch-depth: 1
 
-      - name: Determine packages for this batch
-        id: packages
+      - name: Free up disk space aggressively
         run: |
-          # Get all packages except large ones
-          LARGE_PACKAGES="rust llvm-mingw-w64 llvm-mingw-w64-tools dotnet-host dotnet8.0 dotnet9.0 ghc kotlin swift openjdk-17 openjdk-21 mono agg rust-analyzer rust-bindgen nodejs-lts chromium gcc-default clang swiftshader"
+          echo "Disk space before cleanup:"
+          df -h
 
-          ALL_PACKAGES=$(ls packages/ | sort)
+          # Remove ALL unnecessary pre-installed software
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+          sudo rm -rf /usr/share/swift
+          sudo rm -rf /usr/local/.ghcup
+          sudo rm -rf /usr/local/share/boost
+          sudo rm -rf /usr/local/graalvm
 
-          # Filter out large packages
-          FILTERED_PACKAGES=""
-          for pkg in $ALL_PACKAGES; do
-            skip=false
-            for large in $LARGE_PACKAGES; do
-              if [ "$pkg" = "$large" ]; then
-                skip=true
-                break
-              fi
-            done
-            if [ "$skip" = false ]; then
-              FILTERED_PACKAGES="$FILTERED_PACKAGES$pkg\n"
-            fi
-          done
+          # Remove large packages
+          sudo apt-get remove -y '^dotnet-.*' '^llvm-.*' 'php.*' '^mongodb-.*' '^mysql-.*' azure-cli google-chrome-stable firefox powershell mono-devel libgl1-mesa-dri google-cloud-sdk || true
+          sudo apt-get autoremove -y
+          sudo apt-get clean
 
-          ALL_PACKAGES=$(echo -e "$FILTERED_PACKAGES" | grep -v '^$')
-          TOTAL=$(echo "$ALL_PACKAGES" | wc -l)
+          # Clean apt cache
+          sudo rm -rf /var/lib/apt/lists/*
+          sudo rm -rf /var/cache/apt/archives/*
 
-          # Calculate batch size (25 packages per batch - smaller to avoid disk space issues)
-          BATCH_SIZE=25
-          BATCH_NUM=${{ matrix.batch }}
+          # Remove Docker images and containers
+          docker rmi $(docker image ls -aq) 2>/dev/null || true
+          docker system prune -a -f
 
-          # Skip if batch number is beyond total batches needed
-          TOTAL_BATCHES=$(( ($TOTAL + $BATCH_SIZE - 1) / $BATCH_SIZE ))
-          if [ $BATCH_NUM -gt $TOTAL_BATCHES ]; then
-            echo "Batch $BATCH_NUM not needed (only $TOTAL_BATCHES batches required)"
+          # Remove swap file to reclaim space
+          sudo swapoff -a
+          sudo rm -f /swapfile /mnt/swapfile
+
+          echo "Disk space after cleanup:"
+          df -h
+
+      - name: Check if package exists
+        id: check
+        run: |
+          if [ ! -d "packages/${{ matrix.package }}" ]; then
+            echo "Package ${{ matrix.package }} does not exist"
             echo "skip=true" >> $GITHUB_OUTPUT
             exit 0
           fi
+          echo "skip=false" >> $GITHUB_OUTPUT
 
-          # Calculate start and end for this batch
-          START=$(( ($BATCH_NUM - 1) * $BATCH_SIZE + 1 ))
-          END=$(( $BATCH_NUM * $BATCH_SIZE ))
-
-          echo "Building batch $BATCH_NUM: packages $START to $END (out of $TOTAL regular packages)"
-          echo "Note: Large packages (rust, llvm, dotnet, etc.) are built separately"
-
-          # Get packages for this batch
-          PACKAGES=$(echo "$ALL_PACKAGES" | sed -n "${START},${END}p" | tr '\n' ' ')
-
-          echo "Packages in this batch: $(echo $PACKAGES | wc -w)"
-          echo "packages=$PACKAGES" >> $GITHUB_OUTPUT
-
-      - name: Build packages with Docker
-        if: steps.packages.outputs.skip != 'true'
-        env:
-          PACKAGES: ${{ steps.packages.outputs.packages }}
+      - name: Build large package with Docker
+        if: steps.check.outputs.skip != 'true'
         run: |
-          echo "Building batch ${{ matrix.batch }}: $PACKAGES"
-          ./scripts/run-docker.sh ./build-package.sh -a ${{ matrix.target_arch }} $PACKAGES
+          echo "Building large package: ${{ matrix.package }}"
+          echo "This package requires significant disk space and build time"
+
+          # Monitor disk space before build
+          df -h
+
+          ./scripts/run-docker.sh ./build-package.sh -a ${{ matrix.target_arch }} ${{ matrix.package }}
+
+          # Monitor disk space after build
+          df -h
 
       - name: List built packages
-        if: steps.packages.outputs.skip != 'true'
+        if: steps.check.outputs.skip != 'true'
         run: |
           echo "Built .deb files:"
           find output -name "*.deb" -type f | sort
 
       - name: Rename files for artifact upload (remove colons)
-        if: steps.packages.outputs.skip != 'true'
+        if: steps.check.outputs.skip != 'true'
         run: |
           cd output
           for file in *.deb; do
@@ -106,16 +126,16 @@ jobs:
           done
 
       - name: Upload build artifacts
-        if: steps.packages.outputs.skip != 'true'
+        if: steps.check.outputs.skip != 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: debs-batch-${{ matrix.batch }}-${{ matrix.target_arch }}
+          name: large-${{ matrix.package }}-${{ matrix.target_arch }}
           path: output/*.deb
           retention-days: 7
 
-  publish-all:
-    name: Publish all batches to NeoTerm-repo
-    needs: build-batch
+  publish-large-packages:
+    name: Publish large packages to NeoTerm-repo
+    needs: build-large-package
     runs-on: ubuntu-latest
     steps:
       - name: Checkout NeoTerm-repo
@@ -125,26 +145,26 @@ jobs:
           token: ${{ secrets.NEOTERM_REPO_TOKEN }}
           path: neoterm-repo
 
-      - name: Download all batch artifacts
+      - name: Download all large package artifacts
         uses: actions/download-artifact@v4
         with:
-          path: ./debs-all
+          path: ./debs-large
 
       - name: Install repository tools
         run: |
           sudo apt-get update
           sudo apt-get install -y dpkg-dev apt-utils gzip
 
-      - name: Merge and copy packages to repository
+      - name: Copy large packages to repository
         run: |
           mkdir -p neoterm-repo/dists/stable/main/binary-aarch64
           mkdir -p merged-debs
 
-          # Merge all batch artifacts
-          for batch_dir in debs-all/debs-batch-*; do
-            if [ -d "$batch_dir" ]; then
-              echo "Processing $(basename $batch_dir)..."
-              cp -v "$batch_dir"/*.deb merged-debs/ 2>/dev/null || true
+          # Merge all large package artifacts
+          for pkg_dir in debs-large/large-*; do
+            if [ -d "$pkg_dir" ]; then
+              echo "Processing $(basename $pkg_dir)..."
+              cp -v "$pkg_dir"/*.deb merged-debs/ 2>/dev/null || true
             fi
           done
 
@@ -191,7 +211,7 @@ jobs:
             fi
           done
 
-          echo "Total packages copied to repository: $total"
+          echo "Total large packages copied to repository: $total"
 
       - name: Generate repository metadata
         run: |
@@ -229,16 +249,16 @@ jobs:
           git config user.name "NeoTerm Bot"
           git config user.email "bot@neoterm.io"
           git add .
-          git commit -m "chore: full repository rebuild ($(date +%Y-%m-%d))" || exit 0
+          git commit -m "chore: update large packages ($(date +%Y-%m-%d))" || exit 0
           git push
 
   cleanup:
-    name: Cleanup batch artifacts
-    needs: publish-all
+    name: Cleanup large package artifacts
+    needs: publish-large-packages
     runs-on: ubuntu-latest
     steps:
-      - name: Delete batch artifacts
+      - name: Delete large package artifacts
         uses: geekyeggo/delete-artifact@v5
         with:
-          name: debs-batch-*
+          name: large-*
           failOnError: false

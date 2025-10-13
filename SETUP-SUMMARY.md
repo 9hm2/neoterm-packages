@@ -14,13 +14,27 @@ Successfully configured the neoterm-packages fork to automatically build package
 
 This single change ensures **all packages are built with NeoTerm paths from source**.
 
-### 2. GitHub Actions Workflow (`.github/workflows/neoterm-daily-build.yml`)
+### 2. GitHub Actions Workflows
 
-Created automated build pipeline:
+Created three automated build pipelines:
+
+#### `neoterm-daily-build.yml` - Daily Incremental Builds
 - **Daily sync** with termux/termux-packages (00:00 UTC)
 - **Auto-detect** changed packages
 - **Build** for aarch64 architecture
 - **Publish** to NeoTerm-repo automatically
+
+#### `neoterm-full-rebuild.yml` - Complete Repository Rebuild
+- **85 batches** × 25 packages each = ~2125 capacity
+- **Sequential processing** (one batch at a time)
+- **Excludes large packages** (rust, llvm, dotnet, etc.)
+- Builds ~1985 regular packages
+
+#### `neoterm-large-packages.yml` - Large Package Builds
+- **20 large packages** built individually
+- **8 hour timeout** per package
+- **Aggressive disk cleanup** before each build
+- Handles packages requiring 10-20 GB disk space
 
 ### 3. Documentation (`NEOTERM-README.md`)
 Complete guide for:
@@ -86,6 +100,44 @@ Complete guide for:
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+## Build Strategy: Hybrid Approach
+
+### Problem: Disk Space Constraints
+GitHub Actions free tier provides 14GB disk space. Some packages require 10-20GB during compilation:
+- **Rust**: 15-20 GB (cargo build with dependencies)
+- **LLVM**: 12-18 GB (C++ compilation)
+- **Dotnet**: 10-15 GB (.NET SDK compilation)
+- **Chromium**: 20+ GB (massive C++ codebase)
+
+### Solution: Split Regular and Large Packages
+
+#### Regular Packages (1985 packages)
+- Built in **85 batches** of 25 packages each
+- Sequential processing (one batch at a time)
+- Each batch completes → publishes → cleans up → next starts
+- **Workflow**: `neoterm-full-rebuild.yml`
+
+#### Large Packages (20 packages)
+- Built **individually** (one at a time)
+- Aggressive disk cleanup before each build (frees 8-10 GB)
+- 8-hour timeout per package
+- **Workflow**: `neoterm-large-packages.yml`
+
+**Large packages list:**
+```
+rust, llvm-mingw-w64, llvm-mingw-w64-tools, dotnet-host, dotnet8.0,
+dotnet9.0, ghc, kotlin, swift, openjdk-17, openjdk-21, mono, agg,
+rust-analyzer, rust-bindgen, nodejs-lts, chromium, gcc-default,
+clang, swiftshader
+```
+
+### Complete Build Process
+
+To rebuild the entire repository:
+1. **Run** `neoterm-full-rebuild.yml` → Builds 1985 regular packages
+2. **Run** `neoterm-large-packages.yml` → Builds 20 large packages
+3. **Total**: All 2005+ packages built and published
+
 ## Key Benefits
 
 ### ✅ No Path Rewriting Needed
@@ -96,6 +148,9 @@ Packages are built **directly** with `io.neoterm` prefix.
 
 **Now** (simple approach):
 1. Build with io.neoterm ✅
+
+### ✅ All Packages Included
+No packages skipped - hybrid approach handles both regular and large packages.
 
 ### ✅ Always Up-to-Date
 Daily sync ensures NeoTerm has latest packages from Termux.

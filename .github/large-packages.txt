@@ -1,0 +1,32 @@
+# Large packages that require isolated builds (one at a time)
+# These packages require significant disk space during compilation
+
+# Compilers and runtimes (10-20 GB each)
+rust
+llvm-mingw-w64
+llvm-mingw-w64-tools
+dotnet-host
+dotnet8.0
+dotnet9.0
+ghc
+kotlin
+swift
+openjdk-17
+openjdk-21
+mono
+
+# Heavy Rust packages (5-10 GB)
+agg
+rust-analyzer
+rust-bindgen
+
+# Large Node.js
+nodejs-lts
+
+# Chromium-based
+chromium
+
+# Other large packages
+gcc-default
+clang
+swiftshader
