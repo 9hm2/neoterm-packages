@@ -118,7 +118,6 @@ jobs:
       - name: Merge and copy packages to repository
         run: |
           mkdir -p neoterm-repo/dists/stable/main/binary-aarch64
-          mkdir -p neoterm-repo/pool/main
           mkdir -p merged-debs
 
           # Merge all batch artifacts
@@ -141,10 +140,38 @@ jobs:
           done
           cd ..
 
-          # Copy to pool
-          cp -v merged-debs/*.deb neoterm-repo/pool/main/
+          # Copy to pool with proper directory structure
+          total=0
+          for deb in merged-debs/*.deb; do
+            if [ -f "$deb" ]; then
+              filename=$(basename "$deb")
+              # Extract package name (first part before _)
+              pkgname=$(echo "$filename" | cut -d'_' -f1 | cut -d':' -f1)
 
-          echo "Total packages in repository: $(ls neoterm-repo/pool/main/*.deb | wc -l)"
+              # Determine first letter/prefix for directory structure
+              firstchar=$(echo "$pkgname" | head -c 1)
+
+              # Handle lib* packages specially
+              if [[ "$pkgname" == lib* ]]; then
+                if [ ${#pkgname} -gt 4 ]; then
+                  prefix="lib${pkgname:3:1}"  # lib + 4th character
+                else
+                  prefix="lib"
+                fi
+              else
+                prefix="$firstchar"
+              fi
+
+              # Create directory structure: pool/main/prefix/pkgname/
+              targetdir="neoterm-repo/pool/main/$prefix/$pkgname"
+              mkdir -p "$targetdir"
+
+              cp "$deb" "$targetdir/"
+              ((total++))
+            fi
+          done
+
+          echo "Total packages copied to repository: $total"
 
       - name: Generate repository metadata
         run: |

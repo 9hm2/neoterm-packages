@@ -157,7 +157,6 @@ jobs:
       - name: Copy packages to repository
         run: |
           mkdir -p neoterm-repo/dists/stable/main/binary-aarch64
-          mkdir -p neoterm-repo/pool/main
 
           # Restore colon in filenames (reverse the artifact rename)
           cd debs
@@ -173,8 +172,35 @@ jobs:
           done
           cd ..
 
-          # Copy .deb files to pool
-          cp -v debs/*.deb neoterm-repo/pool/main/
+          # Copy .deb files to pool with proper structure
+          for deb in debs/*.deb; do
+            if [ -f "$deb" ]; then
+              filename=$(basename "$deb")
+              # Extract package name (first part before _)
+              pkgname=$(echo "$filename" | cut -d'_' -f1 | cut -d':' -f1)
+
+              # Determine first letter/prefix for directory structure
+              firstchar=$(echo "$pkgname" | head -c 1)
+
+              # Handle lib* packages specially
+              if [[ "$pkgname" == lib* ]]; then
+                if [ ${#pkgname} -gt 4 ]; then
+                  prefix="lib${pkgname:3:1}"  # lib + 4th character (libc -> libc, libffi -> libf)
+                else
+                  prefix="lib"
+                fi
+              else
+                prefix="$firstchar"
+              fi
+
+              # Create directory structure: pool/main/prefix/pkgname/
+              targetdir="neoterm-repo/pool/main/$prefix/$pkgname"
+              mkdir -p "$targetdir"
+
+              echo "Copying $filename to $prefix/$pkgname/"
+              cp -v "$deb" "$targetdir/"
+            fi
+          done
 
           cd neoterm-repo
 
