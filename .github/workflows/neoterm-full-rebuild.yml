@@ -1,0 +1,197 @@
+name: NeoTerm Full Repository Rebuild
+
+on:
+  workflow_dispatch:
+    inputs:
+      batch_number:
+        description: "Batch number to build (1-20, or 'all' for everything)"
+        required: false
+        default: '1'
+
+permissions:
+  contents: write
+
+jobs:
+  build-batch:
+    name: Build batch ${{ matrix.batch }} for ${{ matrix.target_arch }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 360  # 6 hours max per batch
+    strategy:
+      matrix:
+        target_arch: [aarch64]
+        batch: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+      fail-fast: false
+      max-parallel: 5  # Build 5 batches simultaneously
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 1
+
+      - name: Determine packages for this batch
+        id: packages
+        run: |
+          # Get all packages
+          ALL_PACKAGES=$(ls packages/ | sort)
+          TOTAL=$(echo "$ALL_PACKAGES" | wc -l)
+
+          # Calculate batch size (100 packages per batch)
+          BATCH_SIZE=100
+          BATCH_NUM=${{ matrix.batch }}
+
+          # Skip if batch number is beyond total batches needed
+          TOTAL_BATCHES=$(( ($TOTAL + $BATCH_SIZE - 1) / $BATCH_SIZE ))
+          if [ $BATCH_NUM -gt $TOTAL_BATCHES ]; then
+            echo "Batch $BATCH_NUM not needed (only $TOTAL_BATCHES batches required)"
+            echo "skip=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Calculate start and end for this batch
+          START=$(( ($BATCH_NUM - 1) * $BATCH_SIZE + 1 ))
+          END=$(( $BATCH_NUM * $BATCH_SIZE ))
+
+          echo "Building batch $BATCH_NUM: packages $START to $END (out of $TOTAL total)"
+
+          # Get packages for this batch
+          PACKAGES=$(echo "$ALL_PACKAGES" | sed -n "${START},${END}p" | tr '\n' ' ')
+
+          echo "Packages in this batch: $(echo $PACKAGES | wc -w)"
+          echo "packages=$PACKAGES" >> $GITHUB_OUTPUT
+
+      - name: Build packages with Docker
+        if: steps.packages.outputs.skip != 'true'
+        env:
+          PACKAGES: ${{ steps.packages.outputs.packages }}
+        run: |
+          echo "Building batch ${{ matrix.batch }}: $PACKAGES"
+          ./scripts/run-docker.sh ./build-package.sh -a ${{ matrix.target_arch }} $PACKAGES
+
+      - name: List built packages
+        if: steps.packages.outputs.skip != 'true'
+        run: |
+          echo "Built .deb files:"
+          find output -name "*.deb" -type f | sort
+
+      - name: Rename files for artifact upload (remove colons)
+        if: steps.packages.outputs.skip != 'true'
+        run: |
+          cd output
+          for file in *.deb; do
+            if [[ "$file" == *":"* ]]; then
+              newname="${file//:/_}"
+              mv "$file" "$newname"
+            fi
+          done
+
+      - name: Upload build artifacts
+        if: steps.packages.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: debs-batch-${{ matrix.batch }}-${{ matrix.target_arch }}
+          path: output/*.deb
+          retention-days: 7
+
+  publish-all:
+    name: Publish all batches to NeoTerm-repo
+    needs: build-batch
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout NeoTerm-repo
+        uses: actions/checkout@v4
+        with:
+          repository: 9hm2/NeoTerm-repo
+          token: ${{ secrets.NEOTERM_REPO_TOKEN }}
+          path: neoterm-repo
+
+      - name: Download all batch artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./debs-all
+
+      - name: Install repository tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dpkg-dev apt-utils gzip
+
+      - name: Merge and copy packages to repository
+        run: |
+          mkdir -p neoterm-repo/dists/stable/main/binary-aarch64
+          mkdir -p neoterm-repo/pool/main
+          mkdir -p merged-debs
+
+          # Merge all batch artifacts
+          for batch_dir in debs-all/debs-batch-*; do
+            if [ -d "$batch_dir" ]; then
+              echo "Processing $(basename $batch_dir)..."
+              cp -v "$batch_dir"/*.deb merged-debs/ 2>/dev/null || true
+            fi
+          done
+
+          # Restore colons in filenames
+          cd merged-debs
+          for file in *.deb; do
+            if [[ "$file" == *"_"* ]]; then
+              newname="${file//_/:}"
+              if [[ "$newname" != "$file" ]]; then
+                mv "$file" "$newname" 2>/dev/null || true
+              fi
+            fi
+          done
+          cd ..
+
+          # Copy to pool
+          cp -v merged-debs/*.deb neoterm-repo/pool/main/
+
+          echo "Total packages in repository: $(ls neoterm-repo/pool/main/*.deb | wc -l)"
+
+      - name: Generate repository metadata
+        run: |
+          cd neoterm-repo
+
+          # Generate Packages file
+          dpkg-scanpackages --arch aarch64 pool/ > dists/stable/main/binary-aarch64/Packages
+
+          # Compress
+          gzip -k -f dists/stable/main/binary-aarch64/Packages
+
+          # Generate Release
+          cd dists/stable
+          cat > Release << EOF
+          Origin: NeoTerm
+          Label: NeoTerm Packages
+          Suite: stable
+          Codename: stable
+          Architectures: aarch64
+          Components: main
+          Description: NeoTerm complete package repository (Termux-compatible)
+          Date: $(date -R)
+          EOF
+
+          # Checksums
+          echo "MD5Sum:" >> Release
+          find main -type f -exec md5sum {} \; | sed 's/main/ main/' >> Release
+
+          echo "SHA256:" >> Release
+          find main -type f -exec sha256sum {} \; | sed 's/main/ main/' >> Release
+
+      - name: Commit and push to NeoTerm-repo
+        run: |
+          cd neoterm-repo
+          git config user.name "NeoTerm Bot"
+          git config user.email "bot@neoterm.io"
+          git add .
+          git commit -m "chore: full repository rebuild ($(date +%Y-%m-%d))" || exit 0
+          git push
+
+  cleanup:
+    name: Cleanup batch artifacts
+    needs: publish-all
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete batch artifacts
+        uses: geekyeggo/delete-artifact@v5
+        with:
+          name: debs-batch-*
+          failOnError: false

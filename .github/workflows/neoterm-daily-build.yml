@@ -91,10 +91,12 @@ jobs:
               tr '\n' ' ')
 
             if [ -z "$PACKAGES" ]; then
-              # Fallback to essential packages (verified to exist in packages/)
-              PACKAGES="bash coreutils dpkg apt grep sed gzip tar findutils diffutils ncurses readline libandroid-support libiconv zlib openssl"
+              # Build ALL packages in packages/ directory
+              echo "No changes detected, building ALL packages..."
+              PACKAGES=$(ls packages/ | sort | tr '\n' ' ')
             fi
-            echo "Building changed packages: $PACKAGES"
+            echo "Building packages: $PACKAGES"
+            echo "Total packages to build: $(echo $PACKAGES | wc -w)"
           fi
 
           echo "packages=$PACKAGES" >> $GITHUB_OUTPUT
