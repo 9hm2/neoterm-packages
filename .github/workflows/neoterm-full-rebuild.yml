@@ -19,9 +19,9 @@ jobs:
     strategy:
       matrix:
         target_arch: [aarch64]
-        batch: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+        batch: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85]
       fail-fast: false
-      max-parallel: 5  # Build 5 batches simultaneously
+      max-parallel: 1  # Sequential - one batch at a time to avoid disk space issues
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -36,8 +36,8 @@ jobs:
           ALL_PACKAGES=$(ls packages/ | sort)
           TOTAL=$(echo "$ALL_PACKAGES" | wc -l)
 
-          # Calculate batch size (100 packages per batch)
-          BATCH_SIZE=100
+          # Calculate batch size (25 packages per batch - smaller to avoid disk space issues)
+          BATCH_SIZE=25
           BATCH_NUM=${{ matrix.batch }}
 
           # Skip if batch number is beyond total batches needed
