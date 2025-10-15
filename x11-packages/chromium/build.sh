@@ -2,9 +2,9 @@ TERMUX_PKG_HOMEPAGE=https://www.chromium.org/Home
 TERMUX_PKG_DESCRIPTION="Chromium web browser"
 TERMUX_PKG_LICENSE="BSD 3-Clause"
 TERMUX_PKG_MAINTAINER="@licy183"
-TERMUX_PKG_VERSION=141.0.7390.54
+TERMUX_PKG_VERSION="141.0.7390.76"
 TERMUX_PKG_SRCURL=https://commondatastorage.googleapis.com/chromium-browser-official/chromium-$TERMUX_PKG_VERSION.tar.xz
-TERMUX_PKG_SHA256=7b4dabb601e19ccf9746d65ee6ade9c297bc2654dad417b3cf400a67119956ec
+TERMUX_PKG_SHA256=58178d3a8af7ee7d32833a2a6a736f81e40b08e144b7e7d1725497577ac68c76
 TERMUX_PKG_DEPENDS="atk, cups, dbus, fontconfig, gtk3, krb5, libc++, libevdev, libxkbcommon, libminizip, libnss, libx11, mesa, openssl, pango, pulseaudio, zlib"
 TERMUX_PKG_BUILD_DEPENDS="chromium-host-tools, libffi-static"
 # TODO: Split chromium-common and chromium-headless
@@ -13,6 +13,7 @@ TERMUX_PKG_BUILD_DEPENDS="chromium-host-tools, libffi-static"
 # Chromium doesn't support i686 on Linux.
 TERMUX_PKG_EXCLUDED_ARCHES="i686"
 TERMUX_PKG_ON_DEVICE_BUILD_NOT_SUPPORTED=true
+TERMUX_PKG_AUTO_UPDATE=false
 
 SYSTEM_LIBRARIES="    fontconfig"
 # TERMUX_PKG_DEPENDS="fontconfig"
